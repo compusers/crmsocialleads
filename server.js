@@ -338,6 +338,158 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
   }
 });
 
+// POST /api/auth/forgot-password - Solicitar recuperación de contraseña
+app.post('/api/auth/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email es requerido'
+      });
+    }
+
+    // Buscar usuario
+    const [users] = await pool.query(
+      'SELECT id, email, nombre FROM usuarios WHERE email = ?',
+      [email]
+    );
+
+    // Por seguridad, siempre devolver éxito (no revelar si el email existe)
+    if (users.length === 0) {
+      return res.json({
+        success: true,
+        message: 'Si el email existe, recibirás instrucciones para recuperar tu contraseña'
+      });
+    }
+
+    const user = users[0];
+
+    // Generar token de recuperación (válido por 1 hora)
+    const resetToken = jwt.sign(
+      { id: user.id, email: user.email, type: 'password-reset' },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    // TODO: Enviar email con el token
+    // Por ahora, solo lo devolvemos en la respuesta (en producción NO hacer esto)
+    console.log(`🔑 Token de recuperación para ${email}:`, resetToken);
+    console.log(`🔗 Link de recuperación: https://tudominio.com/reset-password?token=${resetToken}`);
+
+    res.json({
+      success: true,
+      message: 'Se ha enviado un email con instrucciones para recuperar tu contraseña',
+      // SOLO PARA DESARROLLO - ELIMINAR EN PRODUCCIÓN
+      debug_token: process.env.NODE_ENV === 'production' ? undefined : resetToken
+    });
+
+  } catch (error) {
+    console.error('Error en forgot-password:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// GET /api/auth/verify-reset-token/:token - Verificar token de recuperación
+app.get('/api/auth/verify-reset-token/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+      if (err) {
+        return res.status(400).json({
+          success: false,
+          message: 'Token inválido o expirado'
+        });
+      }
+
+      if (decoded.type !== 'password-reset') {
+        return res.status(400).json({
+          success: false,
+          message: 'Token inválido'
+        });
+      }
+
+      res.json({
+        success: true,
+        email: decoded.email
+      });
+    });
+
+  } catch (error) {
+    console.error('Error verificando token:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// POST /api/auth/reset-password - Restablecer contraseña
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    const { token, new_password } = req.body;
+
+    if (!token || !new_password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token y nueva contraseña son requeridos'
+      });
+    }
+
+    if (new_password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'La contraseña debe tener al menos 6 caracteres'
+      });
+    }
+
+    // Verificar token
+    jwt.verify(token, process.env.JWT_SECRET, async (err, decoded) => {
+      if (err) {
+        return res.status(400).json({
+          success: false,
+          message: 'Token inválido o expirado'
+        });
+      }
+
+      if (decoded.type !== 'password-reset') {
+        return res.status(400).json({
+          success: false,
+          message: 'Token inválido'
+        });
+      }
+
+      // Hash de la nueva contraseña
+      const hashedPassword = await bcrypt.hash(new_password, 10);
+
+      // Actualizar contraseña
+      await pool.query(
+        'UPDATE usuarios SET password_hash = ? WHERE id = ?',
+        [hashedPassword, decoded.id]
+      );
+
+      console.log(`✅ Contraseña restablecida para: ${decoded.email}`);
+
+      res.json({
+        success: true,
+        message: 'Contraseña restablecida exitosamente'
+      });
+    });
+
+  } catch (error) {
+    console.error('Error restableciendo contraseña:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
 // ============================================
 // RUTAS DE LEADS
 // ============================================
