@@ -1,0 +1,5 @@
+# Habilitar RewriteEngine
+RewriteEngine On
+
+# Redirigir todas las peticiones al servidor Node.js
+RewriteRule ^(.*)$ http://localhost:3000/$1 [P,L]

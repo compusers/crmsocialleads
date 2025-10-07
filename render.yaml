@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: crm-backend
+    runtime: node
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DB_HOST
+        value: srv452.hstgr.io
+      - key: DB_USER
+        value: u361269377_appcrm
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_NAME
+        value: u361269377_appcrm
+      - key: DB_PORT
+        value: 3306
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 24h
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      - key: FCM_SERVER_KEY
+        sync: false
