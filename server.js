@@ -103,6 +103,42 @@ const authorizeRoles = (...roles) => {
 };
 
 // ============================================
+// RUTAS DE SALUD Y DIAGNÓSTICO
+// ============================================
+
+// Health check
+app.get('/health', async (req, res) => {
+  try {
+    const connection = await pool.getConnection();
+    await connection.query('SELECT 1');
+    connection.release();
+    
+    res.json({ 
+      status: 'ok', 
+      database: 'connected',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'error', 
+      database: 'disconnected',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Verificar tablas
+app.get('/api/debug/tables', async (req, res) => {
+  try {
+    const [tables] = await pool.query('SHOW TABLES');
+    res.json({ success: true, tables });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================
 // RUTAS DE AUTENTICACIÓN
 // ============================================
 
@@ -110,6 +146,8 @@ const authorizeRoles = (...roles) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
+
+    console.log('🔐 Intento de login:', { email, timestamp: new Date().toISOString() });
 
     if (!email || !password) {
       return res.status(400).json({ 
@@ -120,11 +158,12 @@ app.post('/api/auth/login', async (req, res) => {
 
     // Buscar usuario
     const [users] = await pool.query(
-      'SELECT * FROM usuarios WHERE email = ? AND estado = ?',
-      [email, 'activo']
+      'SELECT * FROM usuarios WHERE email = ?',
+      [email]
     );
 
     if (users.length === 0) {
+      console.log('❌ Usuario no encontrado:', email);
       return res.status(401).json({ 
         success: false, 
         message: 'Credenciales inválidas' 
@@ -132,26 +171,36 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const user = users[0];
+    console.log('✅ Usuario encontrado:', { id: user.id, email: user.email, tienePassword: !!user.password });
 
-    // Verificar contraseña
-    const isValidPassword = await bcrypt.compare(password, user.password_hash);
+    // Verificar contraseña - buscar el campo correcto
+    const passwordField = user.password || user.password_hash;
+    
+    if (!passwordField) {
+      console.error('❌ No se encontró campo de contraseña en el usuario');
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Error de configuración del servidor' 
+      });
+    }
+
+    const isValidPassword = await bcrypt.compare(password, passwordField);
+    
     if (!isValidPassword) {
+      console.log('❌ Contraseña incorrecta para:', email);
       return res.status(401).json({ 
         success: false, 
         message: 'Credenciales inválidas' 
       });
     }
 
-    // Actualizar último acceso
-    await pool.query(
-      'UPDATE usuarios SET ultimo_acceso = NOW() WHERE id_usuario = ?',
-      [user.id_usuario]
-    );
+    console.log('✅ Login exitoso para:', email);
 
     // Generar tokens
+    const userId = user.id || user.id_usuario;
     const accessToken = jwt.sign(
       { 
-        id_usuario: user.id_usuario, 
+        id: userId, 
         email: user.email, 
         rol: user.rol 
       },
@@ -160,21 +209,20 @@ app.post('/api/auth/login', async (req, res) => {
     );
 
     const refreshToken = jwt.sign(
-      { id_usuario: user.id_usuario },
+      { id: userId },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
     );
 
     // Preparar datos del usuario (sin password)
     const userData = {
-      id_usuario: user.id_usuario,
+      id: userId,
       nombre: user.nombre,
       email: user.email,
       rol: user.rol,
       telefono: user.telefono,
-      estado: user.estado,
-      avatar_url: user.avatar_url,
-      fecha_creacion: user.fecha_creacion
+      activo: user.activo,
+      avatar: user.avatar
     };
 
     res.json({
@@ -188,10 +236,12 @@ app.post('/api/auth/login', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error en login:', error);
+    console.error('❌ Error en login:', error.message);
+    console.error('Stack:', error.stack);
     res.status(500).json({ 
       success: false, 
-      message: 'Error en el servidor' 
+      message: 'Error en el servidor',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
@@ -529,12 +579,34 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
 // RUTA DE PRUEBA
 // ============================================
 
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    success: true, 
-    message: 'CRM Backend está funcionando',
-    timestamp: new Date().toISOString()
-  });
+app.get('/api/health', async (req, res) => {
+  try {
+    const connection = await pool.getConnection();
+    await connection.ping();
+    connection.release();
+    
+    res.json({ 
+      success: true, 
+      message: 'CRM Backend está funcionando',
+      timestamp: new Date().toISOString(),
+      database: {
+        connected: true,
+        host: process.env.DB_HOST,
+        database: process.env.DB_NAME
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error de conexión a base de datos',
+      error: error.message,
+      database: {
+        connected: false,
+        host: process.env.DB_HOST || 'NO_CONFIGURADO',
+        database: process.env.DB_NAME || 'NO_CONFIGURADO'
+      }
+    });
+  }
 });
 
 app.get('/', (req, res) => {
