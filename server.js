@@ -1446,9 +1446,579 @@ app.get('/', (req, res) => {
       },
       dashboard: {
         stats: 'GET /api/dashboard/stats'
+      },
+      campaigns: {
+        list: 'GET /api/campaigns',
+        get: 'GET /api/campaigns/:id',
+        create: 'POST /api/campaigns',
+        update: 'PUT /api/campaigns/:id',
+        delete: 'DELETE /api/campaigns/:id',
+        changeStatus: 'PATCH /api/campaigns/:id/status',
+        stats: 'GET /api/campaigns/:id/stats'
+      },
+      socialNetworks: {
+        list: 'GET /api/social-networks',
+        get: 'GET /api/social-networks/:id',
+        create: 'POST /api/social-networks',
+        update: 'PUT /api/social-networks/:id',
+        delete: 'DELETE /api/social-networks/:id'
       }
     }
   });
+});
+
+// ============================================
+// RUTAS DE CAMPAÑAS
+// ============================================
+
+// GET /api/campaigns - Obtener todas las campañas
+app.get('/api/campaigns', authenticateToken, async (req, res) => {
+  try {
+    const { estado, id_red_social, limit = 100, offset = 0 } = req.query;
+
+    let query = `
+      SELECT 
+        c.*,
+        rs.nombre as red_social_nombre,
+        (SELECT COUNT(*) FROM leads l WHERE l.id_campana = c.id_campana) as total_leads,
+        (SELECT COUNT(*) FROM clientes cl 
+         INNER JOIN leads l ON cl.id_lead = l.id_lead 
+         WHERE l.id_campana = c.id_campana) as total_clientes,
+        CASE 
+          WHEN (SELECT COUNT(*) FROM leads l WHERE l.id_campana = c.id_campana) > 0 
+          THEN (SELECT COUNT(*) FROM clientes cl 
+                INNER JOIN leads l ON cl.id_lead = l.id_lead 
+                WHERE l.id_campana = c.id_campana) * 100.0 / 
+               (SELECT COUNT(*) FROM leads l WHERE l.id_campana = c.id_campana)
+          ELSE 0
+        END as tasa_conversion
+      FROM campanas c
+      LEFT JOIN redes_sociales rs ON c.id_red_social = rs.id_red_social
+      WHERE 1=1
+    `;
+    
+    const params = [];
+
+    if (estado) {
+      query += ' AND c.estado = ?';
+      params.push(estado);
+    }
+
+    if (id_red_social) {
+      query += ' AND c.id_red_social = ?';
+      params.push(parseInt(id_red_social));
+    }
+
+    query += ' ORDER BY c.fecha_creacion DESC LIMIT ? OFFSET ?';
+    params.push(parseInt(limit), parseInt(offset));
+
+    const [campaigns] = await pool.query(query, params);
+
+    res.json({
+      success: true,
+      campaigns: campaigns
+    });
+
+  } catch (error) {
+    console.error('Error obteniendo campañas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// GET /api/campaigns/:id - Obtener una campaña por ID
+app.get('/api/campaigns/:id', authenticateToken, async (req, res) => {
+  try {
+    const campaignId = parseInt(req.params.id);
+
+    const [campaigns] = await pool.query(`
+      SELECT 
+        c.*,
+        rs.nombre as red_social_nombre,
+        u.nombre as creado_por_nombre
+      FROM campanas c
+      LEFT JOIN redes_sociales rs ON c.id_red_social = rs.id_red_social
+      LEFT JOIN usuarios u ON c.creado_por = u.id_usuario
+      WHERE c.id_campana = ?
+    `, [campaignId]);
+
+    if (campaigns.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Campaña no encontrada'
+      });
+    }
+
+    res.json({
+      success: true,
+      campaign: campaigns[0]
+    });
+
+  } catch (error) {
+    console.error('Error obteniendo campaña:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// POST /api/campaigns - Crear nueva campaña
+app.post('/api/campaigns', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const {
+      nombre,
+      descripcion,
+      fecha_inicio,
+      fecha_fin,
+      presupuesto,
+      id_red_social,
+      estado = 'activa'
+    } = req.body;
+
+    if (!nombre) {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre es requerido'
+      });
+    }
+
+    const [result] = await pool.query(`
+      INSERT INTO campanas (
+        nombre, descripcion, fecha_inicio, fecha_fin, 
+        presupuesto, id_red_social, estado, creado_por
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      nombre,
+      descripcion || null,
+      fecha_inicio || null,
+      fecha_fin || null,
+      presupuesto || null,
+      id_red_social || null,
+      estado,
+      userId
+    ]);
+
+    // Obtener la campaña creada
+    const [campaigns] = await pool.query(`
+      SELECT c.*, rs.nombre as red_social_nombre
+      FROM campanas c
+      LEFT JOIN redes_sociales rs ON c.id_red_social = rs.id_red_social
+      WHERE c.id_campana = ?
+    `, [result.insertId]);
+
+    res.status(201).json({
+      success: true,
+      message: 'Campaña creada exitosamente',
+      campaign: campaigns[0]
+    });
+
+  } catch (error) {
+    console.error('Error creando campaña:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// PUT /api/campaigns/:id - Actualizar campaña
+app.put('/api/campaigns/:id', authenticateToken, async (req, res) => {
+  try {
+    const campaignId = parseInt(req.params.id);
+    const {
+      nombre,
+      descripcion,
+      fecha_inicio,
+      fecha_fin,
+      presupuesto,
+      id_red_social,
+      estado
+    } = req.body;
+
+    // Verificar si la campaña existe
+    const [existing] = await pool.query(
+      'SELECT id_campana FROM campanas WHERE id_campana = ?',
+      [campaignId]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Campaña no encontrada'
+      });
+    }
+
+    await pool.query(`
+      UPDATE campanas SET
+        nombre = ?,
+        descripcion = ?,
+        fecha_inicio = ?,
+        fecha_fin = ?,
+        presupuesto = ?,
+        id_red_social = ?,
+        estado = ?
+      WHERE id_campana = ?
+    `, [
+      nombre,
+      descripcion || null,
+      fecha_inicio || null,
+      fecha_fin || null,
+      presupuesto || null,
+      id_red_social || null,
+      estado,
+      campaignId
+    ]);
+
+    // Obtener la campaña actualizada
+    const [campaigns] = await pool.query(`
+      SELECT c.*, rs.nombre as red_social_nombre
+      FROM campanas c
+      LEFT JOIN redes_sociales rs ON c.id_red_social = rs.id_red_social
+      WHERE c.id_campana = ?
+    `, [campaignId]);
+
+    res.json({
+      success: true,
+      message: 'Campaña actualizada exitosamente',
+      campaign: campaigns[0]
+    });
+
+  } catch (error) {
+    console.error('Error actualizando campaña:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// DELETE /api/campaigns/:id - Eliminar campaña
+app.delete('/api/campaigns/:id', authenticateToken, async (req, res) => {
+  try {
+    const campaignId = parseInt(req.params.id);
+
+    // Verificar si la campaña existe
+    const [existing] = await pool.query(
+      'SELECT id_campana FROM campanas WHERE id_campana = ?',
+      [campaignId]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Campaña no encontrada'
+      });
+    }
+
+    // Verificar si hay leads asociados
+    const [leads] = await pool.query(
+      'SELECT COUNT(*) as count FROM leads WHERE id_campana = ?',
+      [campaignId]
+    );
+
+    if (leads[0].count > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `No se puede eliminar. Hay ${leads[0].count} lead(s) asociado(s) a esta campaña`
+      });
+    }
+
+    await pool.query('DELETE FROM campanas WHERE id_campana = ?', [campaignId]);
+
+    res.json({
+      success: true,
+      message: 'Campaña eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('Error eliminando campaña:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// PATCH /api/campaigns/:id/status - Cambiar estado de campaña
+app.patch('/api/campaigns/:id/status', authenticateToken, async (req, res) => {
+  try {
+    const campaignId = parseInt(req.params.id);
+    const { estado } = req.body;
+
+    if (!['activa', 'pausada', 'finalizada'].includes(estado)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Estado inválido. Debe ser: activa, pausada o finalizada'
+      });
+    }
+
+    await pool.query(
+      'UPDATE campanas SET estado = ? WHERE id_campana = ?',
+      [estado, campaignId]
+    );
+
+    // Obtener la campaña actualizada
+    const [campaigns] = await pool.query(`
+      SELECT c.*, rs.nombre as red_social_nombre
+      FROM campanas c
+      LEFT JOIN redes_sociales rs ON c.id_red_social = rs.id_red_social
+      WHERE c.id_campana = ?
+    `, [campaignId]);
+
+    res.json({
+      success: true,
+      message: `Campaña ${estado}`,
+      campaign: campaigns[0]
+    });
+
+  } catch (error) {
+    console.error('Error cambiando estado:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// GET /api/campaigns/:id/stats - Estadísticas de campaña
+app.get('/api/campaigns/:id/stats', authenticateToken, async (req, res) => {
+  try {
+    const campaignId = parseInt(req.params.id);
+
+    const [stats] = await pool.query(`
+      SELECT 
+        COUNT(DISTINCT l.id_lead) as total_leads,
+        COUNT(DISTINCT c.id_cliente) as total_clientes,
+        SUM(CASE WHEN l.estado = 'caliente' THEN 1 ELSE 0 END) as leads_calientes,
+        SUM(CASE WHEN l.estado = 'frio' THEN 1 ELSE 0 END) as leads_frios,
+        SUM(CASE WHEN l.estado = 'prospecto' THEN 1 ELSE 0 END) as leads_prospectos,
+        CASE 
+          WHEN COUNT(DISTINCT l.id_lead) > 0 
+          THEN COUNT(DISTINCT c.id_cliente) * 100.0 / COUNT(DISTINCT l.id_lead)
+          ELSE 0
+        END as tasa_conversion
+      FROM leads l
+      LEFT JOIN clientes c ON l.id_lead = c.id_lead
+      WHERE l.id_campana = ?
+    `, [campaignId]);
+
+    res.json({
+      success: true,
+      stats: stats[0]
+    });
+
+  } catch (error) {
+    console.error('Error obteniendo estadísticas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// ============================================
+// RUTAS DE REDES SOCIALES
+// ============================================
+
+// GET /api/social-networks - Obtener todas las redes sociales
+app.get('/api/social-networks', authenticateToken, async (req, res) => {
+  try {
+    const { activo } = req.query;
+
+    let query = 'SELECT * FROM redes_sociales WHERE 1=1';
+    const params = [];
+
+    if (activo !== undefined) {
+      query += ' AND activo = ?';
+      params.push(activo === 'true' ? 1 : 0);
+    }
+
+    query += ' ORDER BY nombre ASC';
+
+    const [networks] = await pool.query(query, params);
+
+    res.json({
+      success: true,
+      social_networks: networks
+    });
+
+  } catch (error) {
+    console.error('Error obteniendo redes sociales:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// GET /api/social-networks/:id - Obtener una red social por ID
+app.get('/api/social-networks/:id', authenticateToken, async (req, res) => {
+  try {
+    const networkId = parseInt(req.params.id);
+
+    const [networks] = await pool.query(
+      'SELECT * FROM redes_sociales WHERE id_red_social = ?',
+      [networkId]
+    );
+
+    if (networks.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Red social no encontrada'
+      });
+    }
+
+    res.json({
+      success: true,
+      social_network: networks[0]
+    });
+
+  } catch (error) {
+    console.error('Error obteniendo red social:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// POST /api/social-networks - Crear nueva red social
+app.post('/api/social-networks', authenticateToken, async (req, res) => {
+  try {
+    const { nombre, icono, color, url, activo = true } = req.body;
+
+    if (!nombre) {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre es requerido'
+      });
+    }
+
+    const [result] = await pool.query(`
+      INSERT INTO redes_sociales (nombre, icono, color, url, activo)
+      VALUES (?, ?, ?, ?, ?)
+    `, [nombre, icono || null, color || null, url || null, activo]);
+
+    // Obtener la red social creada
+    const [networks] = await pool.query(
+      'SELECT * FROM redes_sociales WHERE id_red_social = ?',
+      [result.insertId]
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Red social creada exitosamente',
+      social_network: networks[0]
+    });
+
+  } catch (error) {
+    console.error('Error creando red social:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// PUT /api/social-networks/:id - Actualizar red social
+app.put('/api/social-networks/:id', authenticateToken, async (req, res) => {
+  try {
+    const networkId = parseInt(req.params.id);
+    const { nombre, icono, color, url, activo } = req.body;
+
+    // Verificar si existe
+    const [existing] = await pool.query(
+      'SELECT id_red_social FROM redes_sociales WHERE id_red_social = ?',
+      [networkId]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Red social no encontrada'
+      });
+    }
+
+    await pool.query(`
+      UPDATE redes_sociales SET
+        nombre = ?,
+        icono = ?,
+        color = ?,
+        url = ?,
+        activo = ?
+      WHERE id_red_social = ?
+    `, [nombre, icono || null, color || null, url || null, activo, networkId]);
+
+    // Obtener la red social actualizada
+    const [networks] = await pool.query(
+      'SELECT * FROM redes_sociales WHERE id_red_social = ?',
+      [networkId]
+    );
+
+    res.json({
+      success: true,
+      message: 'Red social actualizada exitosamente',
+      social_network: networks[0]
+    });
+
+  } catch (error) {
+    console.error('Error actualizando red social:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// DELETE /api/social-networks/:id - Eliminar red social
+app.delete('/api/social-networks/:id', authenticateToken, async (req, res) => {
+  try {
+    const networkId = parseInt(req.params.id);
+
+    // Verificar si existe
+    const [existing] = await pool.query(
+      'SELECT id_red_social FROM redes_sociales WHERE id_red_social = ?',
+      [networkId]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Red social no encontrada'
+      });
+    }
+
+    // Verificar si hay campañas asociadas
+    const [campaigns] = await pool.query(
+      'SELECT COUNT(*) as count FROM campanas WHERE id_red_social = ?',
+      [networkId]
+    );
+
+    if (campaigns[0].count > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `No se puede eliminar. Hay ${campaigns[0].count} campaña(s) asociada(s)`
+      });
+    }
+
+    await pool.query('DELETE FROM redes_sociales WHERE id_red_social = ?', [networkId]);
+
+    res.json({
+      success: true,
+      message: 'Red social eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('Error eliminando red social:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
 });
 
 // ============================================
