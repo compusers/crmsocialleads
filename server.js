@@ -11,6 +11,8 @@ const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const socketIO = require('socket.io');
 const emailService = require('./services/email-service');
 
 // Intentar cargar multer (puede no estar instalado en Render aún)
@@ -66,6 +68,15 @@ try {
 }
 
 const app = express();
+const server = http.createServer(app);
+const io = socketIO(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ['websocket', 'polling']
+});
 const PORT = process.env.PORT || 3000;
 
 // ============================================
@@ -1460,10 +1471,91 @@ app.use((err, req, res, next) => {
 });
 
 // ============================================
+// SOCKET.IO - REAL-TIME NOTIFICATIONS
+// ============================================
+
+// Middleware de autenticación para Socket.IO
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+  
+  if (!token) {
+    return next(new Error('Authentication error'));
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    socket.userId = decoded.id;
+    socket.userEmail = decoded.email;
+    next();
+  } catch (error) {
+    next(new Error('Authentication error'));
+  }
+});
+
+// Conexiones de Socket.IO
+io.on('connection', (socket) => {
+  console.log(`✅ Usuario conectado: ${socket.userEmail} (ID: ${socket.userId})`);
+  
+  // Unirse a la sala del usuario
+  socket.join(`user_${socket.userId}`);
+  
+  // Evento: marcar como leída
+  socket.on('mark_as_read', async (data) => {
+    try {
+      const { notification_id } = data;
+      
+      await pool.query(
+        'UPDATE notificaciones SET leido = TRUE WHERE id_notificacion = ? AND id_usuario = ?',
+        [notification_id, socket.userId]
+      );
+      
+      // Emitir a todas las conexiones del usuario
+      io.to(`user_${socket.userId}`).emit('notification_read', { notification_id });
+      
+      console.log(`✅ Notificación ${notification_id} marcada como leída por usuario ${socket.userId}`);
+    } catch (error) {
+      console.error('Error marcando notificación como leída:', error);
+      socket.emit('error', { message: 'Error al marcar como leída' });
+    }
+  });
+  
+  // Evento: eliminar notificación
+  socket.on('delete_notification', async (data) => {
+    try {
+      const { notification_id } = data;
+      
+      await pool.query(
+        'DELETE FROM notificaciones WHERE id_notificacion = ? AND id_usuario = ?',
+        [notification_id, socket.userId]
+      );
+      
+      // Emitir a todas las conexiones del usuario
+      io.to(`user_${socket.userId}`).emit('notification_deleted', { notification_id });
+      
+      console.log(`🗑️ Notificación ${notification_id} eliminada por usuario ${socket.userId}`);
+    } catch (error) {
+      console.error('Error eliminando notificación:', error);
+      socket.emit('error', { message: 'Error al eliminar notificación' });
+    }
+  });
+  
+  // Desconexión
+  socket.on('disconnect', () => {
+    console.log(`❌ Usuario desconectado: ${socket.userEmail} (ID: ${socket.userId})`);
+  });
+});
+
+// Función helper para enviar notificaciones en tiempo real
+global.sendNotificationToUser = (userId, notification) => {
+  io.to(`user_${userId}`).emit('notification', notification);
+  console.log(`📨 Notificación enviada a usuario ${userId}:`, notification.titulo);
+};
+
+// ============================================
 // INICIAR SERVIDOR
 // ============================================
 
-app.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`
 ╔═══════════════════════════════════════════════╗
 ║   🚀 CRM Backend Server                       ║
@@ -1472,6 +1564,7 @@ app.listen(PORT, '0.0.0.0', () => {
 ║   🗄️  Base de Datos: ${process.env.DB_HOST}              ║
 ║   📝 Entorno: ${process.env.NODE_ENV}                ║
 ║   ⏰ Iniciado: ${new Date().toLocaleString()}  ║
+║   🔌 Socket.IO: Activo                        ║
 ╚═══════════════════════════════════════════════╝
   `);
 });
