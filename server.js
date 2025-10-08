@@ -9,10 +9,53 @@ const mysql = require('mysql2/promise');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const emailService = require('./services/email-service');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// ============================================
+// CONFIGURACIÓN DE MULTER PARA UPLOADS
+// ============================================
+
+// Crear directorio de uploads si no existe
+const uploadsDir = path.join(__dirname, 'uploads', 'avatars');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Configuración de almacenamiento
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, uploadsDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'avatar-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+// Filtro de archivos (solo imágenes)
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+
+  if (mimetype && extname) {
+    return cb(null, true);
+  } else {
+    cb(new Error('Solo se permiten imágenes (jpeg, jpg, png, gif)'));
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB máximo
+  fileFilter: fileFilter
+});
 
 // ============================================
 // MIDDLEWARES
@@ -34,6 +77,9 @@ app.use(cors({
 // Body parser
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Servir archivos estáticos (avatars)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Logging middleware
 app.use((req, res, next) => {
@@ -516,6 +562,8 @@ app.patch('/api/users/profile', authenticateToken, async (req, res) => {
     const { nombre, email, telefono } = req.body;
     const userId = req.user.id;
 
+    console.log('📝 Actualizar perfil:', { userId, nombre, email, telefono });
+
     // Validar datos
     if (!nombre || !email) {
       return res.status(400).json({
@@ -538,10 +586,12 @@ app.patch('/api/users/profile', authenticateToken, async (req, res) => {
     }
 
     // Actualizar usuario
-    await pool.query(
+    const [updateResult] = await pool.query(
       'UPDATE usuarios SET nombre = ?, email = ?, telefono = ? WHERE id_usuario = ?',
       [nombre, email, telefono || null, userId]
     );
+
+    console.log('📝 Update result:', updateResult);
 
     // Obtener usuario actualizado
     const [users] = await pool.query(
@@ -549,7 +599,7 @@ app.patch('/api/users/profile', authenticateToken, async (req, res) => {
       [userId]
     );
 
-    console.log(`✅ Perfil actualizado para usuario ID: ${userId}`);
+    console.log(`✅ Perfil actualizado para usuario ID: ${userId}`, users[0]);
 
     res.json({
       success: true,
@@ -558,10 +608,10 @@ app.patch('/api/users/profile', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error actualizando perfil:', error);
+    console.error('❌ Error actualizando perfil:', error);
     res.status(500).json({
       success: false,
-      message: 'Error en el servidor'
+      message: 'Error en el servidor: ' + error.message
     });
   }
 });
@@ -727,6 +777,126 @@ app.delete('/api/users/account', authenticateToken, async (req, res) => {
 
   } catch (error) {
     console.error('Error eliminando cuenta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// POST /api/users/avatar - Subir avatar
+app.post('/api/users/avatar', authenticateToken, upload.single('avatar'), async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se proporcionó ninguna imagen'
+      });
+    }
+
+    // Obtener el avatar anterior para eliminarlo
+    const [users] = await pool.query(
+      'SELECT avatar FROM usuarios WHERE id_usuario = ?',
+      [userId]
+    );
+
+    const oldAvatar = users[0]?.avatar;
+
+    // Construir la URL del avatar
+    const avatarUrl = `/uploads/avatars/${req.file.filename}`;
+
+    // Actualizar avatar en base de datos
+    await pool.query(
+      'UPDATE usuarios SET avatar = ? WHERE id_usuario = ?',
+      [avatarUrl, userId]
+    );
+
+    // Eliminar avatar anterior si existe
+    if (oldAvatar) {
+      const oldAvatarPath = path.join(__dirname, oldAvatar);
+      if (fs.existsSync(oldAvatarPath)) {
+        fs.unlinkSync(oldAvatarPath);
+      }
+    }
+
+    // Obtener usuario actualizado
+    const [updatedUsers] = await pool.query(
+      'SELECT id_usuario as id, nombre, email, rol, telefono, activo, avatar FROM usuarios WHERE id_usuario = ?',
+      [userId]
+    );
+
+    console.log(`✅ Avatar actualizado para usuario ID: ${userId}`);
+
+    res.json({
+      success: true,
+      message: 'Avatar actualizado exitosamente',
+      user: updatedUsers[0],
+      avatar_url: avatarUrl
+    });
+
+  } catch (error) {
+    console.error('Error subiendo avatar:', error);
+    
+    // Eliminar archivo subido si hubo error
+    if (req.file) {
+      const filePath = path.join(uploadsDir, req.file.filename);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// DELETE /api/users/avatar - Eliminar avatar
+app.delete('/api/users/avatar', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Obtener el avatar actual
+    const [users] = await pool.query(
+      'SELECT avatar FROM usuarios WHERE id_usuario = ?',
+      [userId]
+    );
+
+    const avatar = users[0]?.avatar;
+
+    // Eliminar avatar de la base de datos
+    await pool.query(
+      'UPDATE usuarios SET avatar = NULL WHERE id_usuario = ?',
+      [userId]
+    );
+
+    // Eliminar archivo si existe
+    if (avatar) {
+      const avatarPath = path.join(__dirname, avatar);
+      if (fs.existsSync(avatarPath)) {
+        fs.unlinkSync(avatarPath);
+      }
+    }
+
+    // Obtener usuario actualizado
+    const [updatedUsers] = await pool.query(
+      'SELECT id_usuario as id, nombre, email, rol, telefono, activo, avatar FROM usuarios WHERE id_usuario = ?',
+      [userId]
+    );
+
+    console.log(`✅ Avatar eliminado para usuario ID: ${userId}`);
+
+    res.json({
+      success: true,
+      message: 'Avatar eliminado exitosamente',
+      user: updatedUsers[0]
+    });
+
+  } catch (error) {
+    console.error('Error eliminando avatar:', error);
     res.status(500).json({
       success: false,
       message: 'Error en el servidor'
