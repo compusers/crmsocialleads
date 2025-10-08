@@ -9,53 +9,64 @@ const mysql = require('mysql2/promise');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
-const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const emailService = require('./services/email-service');
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+// Intentar cargar multer (puede no estar instalado en Render aún)
+let multer;
+let upload;
+try {
+  multer = require('multer');
+  
+  // ============================================
+  // CONFIGURACIÓN DE MULTER PARA UPLOADS
+  // ============================================
+  
+  // Crear directorio de uploads si no existe
+  const uploadsDir = path.join(__dirname, 'uploads', 'avatars');
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
 
-// ============================================
-// CONFIGURACIÓN DE MULTER PARA UPLOADS
-// ============================================
+  // Configuración de almacenamiento
+  const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+      cb(null, uploadsDir);
+    },
+    filename: function (req, file, cb) {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      cb(null, 'avatar-' + uniqueSuffix + path.extname(file.originalname));
+    }
+  });
 
-// Crear directorio de uploads si no existe
-const uploadsDir = path.join(__dirname, 'uploads', 'avatars');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+  // Filtro de archivos (solo imágenes)
+  const fileFilter = (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+
+    if (mimetype && extname) {
+      return cb(null, true);
+    } else {
+      cb(new Error('Solo se permiten imágenes (jpeg, jpg, png, gif)'));
+    }
+  };
+
+  upload = multer({
+    storage: storage,
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB máximo
+    fileFilter: fileFilter
+  });
+  
+  console.log('✅ Multer configurado correctamente');
+} catch (error) {
+  console.warn('⚠️ Multer no disponible:', error.message);
+  console.warn('📝 Las funciones de upload de avatar no estarán disponibles hasta instalar multer');
 }
 
-// Configuración de almacenamiento
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadsDir);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'avatar-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-// Filtro de archivos (solo imágenes)
-const fileFilter = (req, file, cb) => {
-  const allowedTypes = /jpeg|jpg|png|gif/;
-  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-  const mimetype = allowedTypes.test(file.mimetype);
-
-  if (mimetype && extname) {
-    return cb(null, true);
-  } else {
-    cb(new Error('Solo se permiten imágenes (jpeg, jpg, png, gif)'));
-  }
-};
-
-const upload = multer({
-  storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB máximo
-  fileFilter: fileFilter
-});
+const app = express();
+const PORT = process.env.PORT || 3000;
 
 // ============================================
 // MIDDLEWARES
@@ -785,7 +796,15 @@ app.delete('/api/users/account', authenticateToken, async (req, res) => {
 });
 
 // POST /api/users/avatar - Subir avatar
-app.post('/api/users/avatar', authenticateToken, upload.single('avatar'), async (req, res) => {
+app.post('/api/users/avatar', authenticateToken, (req, res, next) => {
+  if (!upload) {
+    return res.status(503).json({
+      success: false,
+      message: 'La funcionalidad de upload no está disponible temporalmente'
+    });
+  }
+  upload.single('avatar')(req, res, next);
+}, async (req, res) => {
   try {
     const userId = req.user.id;
 
@@ -804,8 +823,9 @@ app.post('/api/users/avatar', authenticateToken, upload.single('avatar'), async 
 
     const oldAvatar = users[0]?.avatar;
 
-    // Construir la URL del avatar
-    const avatarUrl = `/uploads/avatars/${req.file.filename}`;
+    // Construir la URL del avatar  
+    const baseUrl = process.env.BASE_URL || `http://localhost:${PORT}`;
+    const avatarUrl = `${baseUrl}/uploads/avatars/${req.file.filename}`;
 
     // Actualizar avatar en base de datos
     await pool.query(
@@ -815,9 +835,14 @@ app.post('/api/users/avatar', authenticateToken, upload.single('avatar'), async 
 
     // Eliminar avatar anterior si existe
     if (oldAvatar) {
-      const oldAvatarPath = path.join(__dirname, oldAvatar);
-      if (fs.existsSync(oldAvatarPath)) {
-        fs.unlinkSync(oldAvatarPath);
+      try {
+        const filename = oldAvatar.split('/').pop();
+        const oldAvatarPath = path.join(__dirname, 'uploads', 'avatars', filename);
+        if (fs.existsSync(oldAvatarPath)) {
+          fs.unlinkSync(oldAvatarPath);
+        }
+      } catch (err) {
+        console.warn('No se pudo eliminar avatar anterior:', err.message);
       }
     }
 
@@ -837,19 +862,23 @@ app.post('/api/users/avatar', authenticateToken, upload.single('avatar'), async 
     });
 
   } catch (error) {
-    console.error('Error subiendo avatar:', error);
+    console.error('❌ Error subiendo avatar:', error);
     
     // Eliminar archivo subido si hubo error
     if (req.file) {
-      const filePath = path.join(uploadsDir, req.file.filename);
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+      try {
+        const filePath = path.join(__dirname, 'uploads', 'avatars', req.file.filename);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      } catch (err) {
+        console.warn('No se pudo eliminar archivo temporal:', err.message);
       }
     }
 
     res.status(500).json({
       success: false,
-      message: 'Error en el servidor'
+      message: 'Error en el servidor: ' + error.message
     });
   }
 });
