@@ -51,12 +51,12 @@ async function createAdminUser() {
     
     const [result] = await connection.execute(
       query,
-      ['Administrador', 'admin@crm.com', hashedPassword, 'admin', 'activo']
+      ['Admin CRM', 'admin@crmsocialleads.com', hashedPassword, 'admin', 'activo']
     );
 
     console.log('\n✅ Usuario creado/actualizado');
     console.log('\n📧 Credenciales:');
-    console.log('   Email: admin@crm.com');
+    console.log('   Email: admin@crmsocialleads.com');
     console.log('   Password: admin123');
 
   } catch (error) {

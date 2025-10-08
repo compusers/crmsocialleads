@@ -17,8 +17,23 @@ class EmailService {
     // Configurar transporter según el proveedor
     const emailProvider = process.env.EMAIL_PROVIDER || 'smtp';
 
+    console.log('📧 Inicializando servicio de email...');
+    console.log(`   Provider: ${emailProvider}`);
+    console.log(`   SMTP_HOST: ${process.env.SMTP_HOST || 'NOT SET'}`);
+    console.log(`   SMTP_PORT: ${process.env.SMTP_PORT || 'NOT SET'}`);
+    console.log(`   SMTP_USER: ${process.env.SMTP_USER || 'NOT SET'}`);
+    console.log(`   SMTP_PASSWORD: ${process.env.SMTP_PASSWORD ? '***SET***' : 'NOT SET'}`);
+    console.log(`   EMAIL_FROM: ${process.env.EMAIL_FROM || 'NOT SET'}`);
+
     if (emailProvider === 'smtp') {
       // SMTP genérico (Hostinger, Gmail, etc.)
+      if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
+        console.error('❌ ERROR: Faltan variables de entorno para SMTP');
+        console.error('   Necesitas configurar: SMTP_HOST, SMTP_USER, SMTP_PASSWORD');
+        this.transporter = null;
+        return;
+      }
+
       this.transporter = nodemailer.createTransport({
         host: process.env.SMTP_HOST,
         port: process.env.SMTP_PORT || 587,
@@ -31,6 +46,7 @@ class EmailService {
         greetingTimeout: 10000,
         socketTimeout: 10000,
       });
+      console.log('✅ SMTP transporter creado correctamente');
     } else if (emailProvider === 'gmail') {
       // Gmail
       this.transporter = nodemailer.createTransport({
