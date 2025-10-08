@@ -934,6 +934,183 @@ app.delete('/api/users/avatar', authenticateToken, async (req, res) => {
 });
 
 // ============================================
+// RUTAS DE NOTIFICACIONES
+// ============================================
+
+// GET /api/notifications - Obtener notificaciones del usuario
+app.get('/api/notifications', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { leido, limit = 50, offset = 0 } = req.query;
+
+    let query = 'SELECT * FROM notificaciones WHERE id_usuario = ?';
+    const params = [userId];
+
+    if (leido !== undefined) {
+      query += ' AND leido = ?';
+      params.push(leido === 'true' ? 1 : 0);
+    }
+
+    query += ' ORDER BY fecha_creacion DESC LIMIT ? OFFSET ?';
+    params.push(parseInt(limit), parseInt(offset));
+
+    const [notifications] = await pool.query(query, params);
+
+    // Obtener total
+    const [totalResult] = await pool.query(
+      'SELECT COUNT(*) as total FROM notificaciones WHERE id_usuario = ?',
+      [userId]
+    );
+
+    // Obtener no leídas
+    const [unreadResult] = await pool.query(
+      'SELECT COUNT(*) as count FROM notificaciones WHERE id_usuario = ? AND leido = FALSE',
+      [userId]
+    );
+
+    res.json({
+      success: true,
+      notifications: notifications,
+      total: totalResult[0].total,
+      unread_count: unreadResult[0].count
+    });
+
+  } catch (error) {
+    console.error('Error obteniendo notificaciones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// GET /api/notifications/unread-count - Obtener contador de no leídas
+app.get('/api/notifications/unread-count', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const [result] = await pool.query(
+      'SELECT COUNT(*) as count FROM notificaciones WHERE id_usuario = ? AND leido = FALSE',
+      [userId]
+    );
+
+    res.json({
+      success: true,
+      count: result[0].count
+    });
+
+  } catch (error) {
+    console.error('Error obteniendo contador:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// PATCH /api/notifications/:id/read - Marcar como leída
+app.patch('/api/notifications/:id/read', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const notificationId = req.params.id;
+
+    // Verificar que la notificación pertenece al usuario
+    const [notifications] = await pool.query(
+      'SELECT * FROM notificaciones WHERE id_notificacion = ? AND id_usuario = ?',
+      [notificationId, userId]
+    );
+
+    if (notifications.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notificación no encontrada'
+      });
+    }
+
+    // Marcar como leída
+    await pool.query(
+      'UPDATE notificaciones SET leido = TRUE WHERE id_notificacion = ?',
+      [notificationId]
+    );
+
+    res.json({
+      success: true,
+      message: 'Notificación marcada como leída'
+    });
+
+  } catch (error) {
+    console.error('Error marcando notificación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// POST /api/notifications/read-all - Marcar todas como leídas
+app.post('/api/notifications/read-all', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    await pool.query(
+      'UPDATE notificaciones SET leido = TRUE WHERE id_usuario = ? AND leido = FALSE',
+      [userId]
+    );
+
+    res.json({
+      success: true,
+      message: 'Todas las notificaciones marcadas como leídas'
+    });
+
+  } catch (error) {
+    console.error('Error marcando todas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// DELETE /api/notifications/:id - Eliminar notificación
+app.delete('/api/notifications/:id', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const notificationId = req.params.id;
+
+    // Verificar que la notificación pertenece al usuario
+    const [notifications] = await pool.query(
+      'SELECT * FROM notificaciones WHERE id_notificacion = ? AND id_usuario = ?',
+      [notificationId, userId]
+    );
+
+    if (notifications.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notificación no encontrada'
+      });
+    }
+
+    // Eliminar
+    await pool.query(
+      'DELETE FROM notificaciones WHERE id_notificacion = ?',
+      [notificationId]
+    );
+
+    res.json({
+      success: true,
+      message: 'Notificación eliminada'
+    });
+
+  } catch (error) {
+    console.error('Error eliminando notificación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// ============================================
 // RUTAS DE LEADS
 // ============================================
 
