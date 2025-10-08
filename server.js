@@ -352,7 +352,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
 
     // Buscar usuario
     const [users] = await pool.query(
-      'SELECT id, email, nombre FROM usuarios WHERE email = ?',
+      'SELECT id_usuario, email, nombre FROM usuarios WHERE email = ?',
       [email]
     );
 
@@ -365,10 +365,11 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     }
 
     const user = users[0];
+    const userId = user.id_usuario || user.id;
 
     // Generar token de recuperación (válido por 1 hora)
     const resetToken = jwt.sign(
-      { id: user.id, email: user.email, type: 'password-reset' },
+      { id: userId, email: user.email, type: 'password-reset' },
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );
