@@ -9,6 +9,7 @@ const mysql = require('mysql2/promise');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
+const emailService = require('./services/email-service');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -374,10 +375,24 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       { expiresIn: '1h' }
     );
 
+    // Enviar email con el token
+    const emailResult = await emailService.sendPasswordResetEmail(
+      user.email,
+      resetToken,
+      user.nombre
+    );
+
+    if (!emailResult.success) {
+      console.error('❌ Error enviando email:', emailResult.error);
+      // Continuar de todos modos (no revelar al usuario que falló el email)
+    } else {
+      console.log(`✅ Email de recuperación enviado a ${email}`);
+    }
+
     // TODO: Enviar email con el token
     // Por ahora, solo lo devolvemos en la respuesta (en producción NO hacer esto)
     console.log(`🔑 Token de recuperación para ${email}:`, resetToken);
-    console.log(`🔗 Link de recuperación: https://tudominio.com/reset-password?token=${resetToken}`);
+    console.log(`🔗 Link de recuperación: ${process.env.APP_URL}/reset-password?token=${resetToken}`);
 
     res.json({
       success: true,
