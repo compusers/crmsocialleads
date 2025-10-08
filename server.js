@@ -507,6 +507,234 @@ app.post('/api/auth/reset-password', async (req, res) => {
 });
 
 // ============================================
+// RUTAS DE PERFIL DE USUARIO
+// ============================================
+
+// PATCH /api/users/profile - Actualizar perfil
+app.patch('/api/users/profile', authenticateToken, async (req, res) => {
+  try {
+    const { nombre, email, telefono } = req.body;
+    const userId = req.user.id;
+
+    // Validar datos
+    if (!nombre || !email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nombre y email son requeridos'
+      });
+    }
+
+    // Verificar si el email ya existe (y no es el del usuario actual)
+    const [existingUser] = await pool.query(
+      'SELECT id_usuario FROM usuarios WHERE email = ? AND id_usuario != ?',
+      [email, userId]
+    );
+
+    if (existingUser.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'El email ya está en uso por otro usuario'
+      });
+    }
+
+    // Actualizar usuario
+    await pool.query(
+      'UPDATE usuarios SET nombre = ?, email = ?, telefono = ? WHERE id_usuario = ?',
+      [nombre, email, telefono || null, userId]
+    );
+
+    // Obtener usuario actualizado
+    const [users] = await pool.query(
+      'SELECT id_usuario as id, nombre, email, rol, telefono, activo, avatar FROM usuarios WHERE id_usuario = ?',
+      [userId]
+    );
+
+    console.log(`✅ Perfil actualizado para usuario ID: ${userId}`);
+
+    res.json({
+      success: true,
+      message: 'Perfil actualizado exitosamente',
+      user: users[0]
+    });
+
+  } catch (error) {
+    console.error('Error actualizando perfil:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// POST /api/users/change-password - Cambiar contraseña
+app.post('/api/users/change-password', authenticateToken, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body;
+    const userId = req.user.id;
+
+    // Validar datos
+    if (!current_password || !new_password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Contraseña actual y nueva son requeridas'
+      });
+    }
+
+    if (new_password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'La nueva contraseña debe tener al menos 6 caracteres'
+      });
+    }
+
+    // Obtener usuario
+    const [users] = await pool.query(
+      'SELECT password_hash FROM usuarios WHERE id_usuario = ?',
+      [userId]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+
+    // Verificar contraseña actual
+    const isMatch = await bcrypt.compare(current_password, users[0].password_hash);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'La contraseña actual es incorrecta'
+      });
+    }
+
+    // Verificar que la nueva contraseña sea diferente
+    const isSame = await bcrypt.compare(new_password, users[0].password_hash);
+    if (isSame) {
+      return res.status(400).json({
+        success: false,
+        message: 'La nueva contraseña debe ser diferente a la actual'
+      });
+    }
+
+    // Hash de la nueva contraseña
+    const hashedPassword = await bcrypt.hash(new_password, 10);
+
+    // Actualizar contraseña
+    await pool.query(
+      'UPDATE usuarios SET password_hash = ? WHERE id_usuario = ?',
+      [hashedPassword, userId]
+    );
+
+    console.log(`✅ Contraseña cambiada para usuario ID: ${userId}`);
+
+    res.json({
+      success: true,
+      message: 'Contraseña actualizada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('Error cambiando contraseña:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// DELETE /api/users/account - Eliminar cuenta (solo usuarios no administradores)
+app.delete('/api/users/account', authenticateToken, async (req, res) => {
+  try {
+    const { password } = req.body;
+    const userId = req.user.id;
+    const userRole = req.user.rol;
+
+    // Validar que no sea administrador
+    if (userRole.toLowerCase() === 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Los administradores no pueden eliminar su cuenta desde aquí'
+      });
+    }
+
+    // Validar contraseña
+    if (!password) {
+      return res.status(400).json({
+        success: false,
+        message: 'La contraseña es requerida para confirmar la eliminación'
+      });
+    }
+
+    // Verificar contraseña
+    const [users] = await pool.query(
+      'SELECT password_hash, email FROM usuarios WHERE id_usuario = ?',
+      [userId]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+
+    const isMatch = await bcrypt.compare(password, users[0].password_hash);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Contraseña incorrecta'
+      });
+    }
+
+    // Iniciar transacción
+    const connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    try {
+      // Eliminar registros relacionados en cascada
+      
+      // 1. Eliminar actividades del usuario
+      await connection.query('DELETE FROM actividades WHERE id_usuario = ?', [userId]);
+      
+      // 2. Desasignar leads (no eliminar, solo desasignar)
+      await connection.query('UPDATE leads SET id_asignado = NULL WHERE id_asignado = ?', [userId]);
+      
+      // 3. Eliminar notificaciones del usuario
+      await connection.query('DELETE FROM notificaciones WHERE id_usuario = ?', [userId]);
+      
+      // 4. Eliminar comentarios del usuario
+      await connection.query('DELETE FROM comentarios WHERE id_usuario = ?', [userId]);
+      
+      // 5. Finalmente, eliminar el usuario
+      await connection.query('DELETE FROM usuarios WHERE id_usuario = ?', [userId]);
+
+      await connection.commit();
+      connection.release();
+
+      console.log(`✅ Cuenta eliminada para usuario ID: ${userId} (${users[0].email})`);
+
+      res.json({
+        success: true,
+        message: 'Cuenta eliminada exitosamente'
+      });
+
+    } catch (error) {
+      await connection.rollback();
+      connection.release();
+      throw error;
+    }
+
+  } catch (error) {
+    console.error('Error eliminando cuenta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
+// ============================================
 // RUTAS DE LEADS
 // ============================================
 
