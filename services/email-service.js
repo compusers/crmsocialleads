@@ -27,6 +27,9 @@ class EmailService {
           user: process.env.SMTP_USER,
           pass: process.env.SMTP_PASSWORD,
         },
+        connectionTimeout: 10000, // 10 segundos
+        greetingTimeout: 10000,
+        socketTimeout: 10000,
       });
     } else if (emailProvider === 'gmail') {
       // Gmail
@@ -36,6 +39,9 @@ class EmailService {
           user: process.env.GMAIL_USER,
           pass: process.env.GMAIL_APP_PASSWORD, // App Password, no la contraseña normal
         },
+        connectionTimeout: 10000,
+        greetingTimeout: 10000,
+        socketTimeout: 10000,
       });
     }
 

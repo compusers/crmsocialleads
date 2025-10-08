@@ -375,31 +375,31 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       { expiresIn: '1h' }
     );
 
-    // Enviar email con el token
-    const emailResult = await emailService.sendPasswordResetEmail(
-      user.email,
-      resetToken,
-      user.nombre
-    );
-
-    if (!emailResult.success) {
-      console.error('❌ Error enviando email:', emailResult.error);
-      // Continuar de todos modos (no revelar al usuario que falló el email)
-    } else {
-      console.log(`✅ Email de recuperación enviado a ${email}`);
-    }
-
-    // TODO: Enviar email con el token
-    // Por ahora, solo lo devolvemos en la respuesta (en producción NO hacer esto)
-    console.log(`🔑 Token de recuperación para ${email}:`, resetToken);
-    console.log(`🔗 Link de recuperación: ${process.env.APP_URL}/reset-password?token=${resetToken}`);
-
+    // Responder inmediatamente (no esperar a que se envíe el email)
     res.json({
       success: true,
       message: 'Se ha enviado un email con instrucciones para recuperar tu contraseña',
       // SOLO PARA DESARROLLO - ELIMINAR EN PRODUCCIÓN
       debug_token: process.env.NODE_ENV === 'production' ? undefined : resetToken
     });
+
+    // Enviar email de forma asíncrona (no bloquear la respuesta)
+    emailService.sendPasswordResetEmail(
+      user.email,
+      resetToken,
+      user.nombre
+    ).then(emailResult => {
+      if (!emailResult.success) {
+        console.error('❌ Error enviando email:', emailResult.error);
+      } else {
+        console.log(`✅ Email de recuperación enviado a ${email}`);
+      }
+    }).catch(error => {
+      console.error('❌ Error crítico enviando email:', error);
+    });
+
+    console.log(`🔑 Token de recuperación para ${email}:`, resetToken);
+    console.log(`🔗 Link de recuperación: ${process.env.APP_URL}/reset-password?token=${resetToken}`);
 
   } catch (error) {
     console.error('Error en forgot-password:', error);
