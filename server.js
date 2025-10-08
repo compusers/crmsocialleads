@@ -279,7 +279,7 @@ app.post('/api/auth/login', async (req, res) => {
       email: user.email,
       rol: user.rol,
       telefono: user.telefono,
-      activo: user.activo,
+      activo: user.estado === 'activo' ? 1 : 0,
       avatar: user.avatar
     };
 
@@ -606,7 +606,7 @@ app.patch('/api/users/profile', authenticateToken, async (req, res) => {
 
     // Obtener usuario actualizado
     const [users] = await pool.query(
-      'SELECT id_usuario as id, nombre, email, rol, telefono, estado as activo, avatar FROM usuarios WHERE id_usuario = ?',
+      'SELECT id_usuario as id, nombre, email, rol, telefono, CASE WHEN estado = "activo" THEN 1 ELSE 0 END as activo, avatar FROM usuarios WHERE id_usuario = ?',
       [userId]
     );
 
@@ -848,7 +848,7 @@ app.post('/api/users/avatar', authenticateToken, (req, res, next) => {
 
     // Obtener usuario actualizado
     const [updatedUsers] = await pool.query(
-      'SELECT id_usuario as id, nombre, email, rol, telefono, estado as activo, avatar FROM usuarios WHERE id_usuario = ?',
+      'SELECT id_usuario as id, nombre, email, rol, telefono, CASE WHEN estado = "activo" THEN 1 ELSE 0 END as activo, avatar FROM usuarios WHERE id_usuario = ?',
       [userId]
     );
 
@@ -912,7 +912,7 @@ app.delete('/api/users/avatar', authenticateToken, async (req, res) => {
 
     // Obtener usuario actualizado
     const [updatedUsers] = await pool.query(
-      'SELECT id_usuario as id, nombre, email, rol, telefono, estado as activo, avatar FROM usuarios WHERE id_usuario = ?',
+      'SELECT id_usuario as id, nombre, email, rol, telefono, CASE WHEN estado = "activo" THEN 1 ELSE 0 END as activo, avatar FROM usuarios WHERE id_usuario = ?',
       [userId]
     );
 
