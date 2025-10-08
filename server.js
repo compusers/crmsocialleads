@@ -1110,6 +1110,41 @@ app.delete('/api/notifications/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// POST /api/users/fcm-token - Guardar token FCM
+app.post('/api/users/fcm-token', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { fcm_token } = req.body;
+
+    if (!fcm_token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token FCM requerido'
+      });
+    }
+
+    // Guardar token en la base de datos
+    await pool.query(
+      'UPDATE usuarios SET fcm_token = ? WHERE id_usuario = ?',
+      [fcm_token, userId]
+    );
+
+    console.log(`✅ FCM Token guardado para usuario ${userId}`);
+
+    res.json({
+      success: true,
+      message: 'Token FCM guardado'
+    });
+
+  } catch (error) {
+    console.error('Error guardando FCM token:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor'
+    });
+  }
+});
+
 // ============================================
 // RUTAS DE LEADS
 // ============================================
